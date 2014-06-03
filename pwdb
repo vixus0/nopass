@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import hashlib, argparse, os
+from getpass import getpass, getuser
 
 try:
     import cPickle as pkl
@@ -8,6 +9,7 @@ except ImportError:
     import pickle as pkl
 
 DEFAULT_DB = os.environ['HOME'] + "/.pwdb"
+ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub']
 
 def is_exe(exe):
     for path in os.environ["PATH"].split(os.pathsep):
@@ -23,9 +25,12 @@ def argparser():
 
     add_parser = sub.add_parser('add', aliases=['a'], help='Add a new entry')
     add_parser.add_argument('entry', help='Entry name')
-    add_parser.add_argument('-u', '--user', help='Username', required=True)
-    add_parser.add_argument('-t', '--target', help='Website URL or program name', required=True)
-    add_parser.add_argument('-w', '--win', help='xdotool search string for autotyping')
+    add_parser.add_argument('-f', '--force', help='Force overwrite on existing entry', action='store_true')
+    add_parser.add_argument('-u', '--user', help='Username. Defaults to login name', default=getuser())
+    add_parser.add_argument('-t', '--target', help='Website URL or program name')
+    add_parser.add_argument('-w', '--win', help='Window name for autotyping')
+    add_parser.add_argument('--trunc', help='Truncate password to N characters', type=int, metavar='N') 
+    add_parser.add_argument('--sub', help='Substitute characters in hash', nargs=2, action='append')
     add_parser.set_defaults(run=add)
 
     del_parser = sub.add_parser('del', aliases=['d'], help='Delete an entry')
@@ -34,18 +39,11 @@ def argparser():
 
     prn_parser = sub.add_parser('print', aliases=['p'], help='Print an entry to stdout')
     prn_parser.add_argument('entry', help='Entry name')
-    prn_parser.add_argument('-n', '--name', help='Print the name', action='store_true')
-    prn_parser.add_argument('-u', '--user', help='Print the username', action='store_true')
-    prn_parser.add_argument('-t', '--target', help='Print the target', action='store_true')
-    prn_parser.add_argument('-w', '--win', help='Print the xdotool search string', action='store_true')
-    prn_parser.add_argument('-p', '--pass', help='Print the password as PLAINTEXT', action='store_true')
+    for field in ROW_FIELDS:
+        prn_parser.add_argument('--'+field, dest='prn_fields', const=field, action='append_const')
+    prn_parser.add_argument('--pw', help='Print password IN PLAINTEXT', action='store_true')
+    prn_parser.add_argument('--all', help='Print all fields', action='store_true')
     prn_parser.set_defaults(run=prn)
-
-    clp_parser = sub.add_parser('clip', aliases=['c'], help='Put stuff on clipboard')
-    clp_parser.add_argument('entry', help='Entry name')
-    clp_parser.add_argument('-u', '--user', help='Copy username', action='store_true')
-    clp_parser.add_argument('-p', '--pass', help='Copy password', action='store_true')
-    clp_parser.set_defaults(run=clip)
 
     xdo_parser = sub.add_parser('xdo', aliases=['x'], help='Autotyping with xdotool')
     xdo_parser.add_argument('-n', '--entry', help='Autofocus and autotype based on entry') 
@@ -53,25 +51,118 @@ def argparser():
 
     return ap
 
-def add(args):
-    pass
+def mkpass(entry, phrase):
+    h = hashlib.sha1()
+    h.update(entry['user'])
+    h.update(entry['target'])
+    h.update(phrase)
+    return h.hexdigest()
 
-def delete(args):
-    pass
+def add(db, args):
+    fields = ROW_FIELDS
+    if args.entry in db.keys() and not args.force:
+        print("Entry already exists in database. Use -f to overwrite.")
+    else:
+        db[args.entry] = {k:v for k,v in vars(args).items() if k in fields}
 
-def prn(args):
-    pass
+def delete(db, args):
+    if args.entry in db.keys():
+        del db[args.entry]
+    else:
+        print("Entry not found.")
 
-def clip(args):
-    pass
+def prn(db, args):
+    fields = ROW_FIELDS
+    pfields = args.prn_fields
 
-def xdo(args):
-    pass
+    if args.entry in db.keys():
+        entry = db[args.entry]
+
+        if args.all:
+            pfields = fields
+
+        for k in pfields:
+            print("{} {}".format(k, entry[k]))
+
+        if args.pw:
+            phrase = getpass('Passphrase: ')
+            print("pw "+mkpass(entry, phrase))
+    else:
+        print("Entry not found.")
+
+def dmenu_getpass():
+    import subprocess as sub
+
+
+
+def xdo(db, args):
+    import subprocess as sub
+    xd = 'xdotool'
+
+    def find_entry(string):
+        for name,entry in db.items():
+            if 'win' not in entry.keys():
+                continue
+            else:
+                sub = string.lower().find(entry['win'].lower())
+            if sub > 0:
+                return entry
+        return None
+
+    if not is_exe(xd):
+        print("Requires xdotool!")
+        return
+    if not args.entry:
+        # Then we just use the active window 
+        proc = sub.Popen([xd, 'getactivewindow', 'getwindowname'],
+                stdin=None, stdout=sub.PIPE, stderr=sub.PIPE
+                )
+        try:
+            out, err = proc.communicate(timeout=60)
+        except TimeoutExpired:
+            proc.kill()
+            return
+
+        proc.wait()
+
+        title = out.decode("utf-8")
+        print("Title: "+title)
+
+        # Search in entries
+        entry = find_entry(title)
+        if entry:
+            print("Found entry: "+entry['name'])
+            phrase = dmenu_getpass()
+            sub.call([xd, 'getactivewindow', 'type', entry['user']])
+            sub.call([xd, 'getactivewindow', 'key', 'Tab'])
+            sub.call([xd, 'getactivewindow', 'type', mkpass(entry, phrase))
+
+
+
+def save_db(db, path):
+    dirs = os.path.dirname(path)
+    if not os.path.isdir(dirs):
+        os.makedirs(dirs)
+    f = open(path, 'wb')
+    pkl.dump(db, f, -1)
+
+def load_db(path):
+    try:
+        d = pkl.load(open(path, 'rb'))
+    except (FileNotFoundError, pkl.UnpicklingError) as e:
+        print("Error loading database file at: "+path)
+        d = {}
+    return d
+
 
 if __name__ == "__main__":
-
     ap = argparser()
     args = ap.parse_args()
 
     if 'run' in vars(args):
-        args.run(args)
+        db = load_db(args.file) 
+        args.run(db, args)
+        save_db(db, args.file)
+    else:
+        ap.print_help()
+
