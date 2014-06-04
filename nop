@@ -42,7 +42,7 @@ def needs(exe):
 
 def dmenu_getpass():
     """Opens a dmenu prompt to get the passphrase."""
-    from subprocess import Popen, PIPE
+    from subprocess import Popen, PIPE, TimeoutExpired
 
     dm = 'dmenu'
     needs(dm)
@@ -50,9 +50,11 @@ def dmenu_getpass():
     proc = Popen([dm, '-p', 'Passphrase:'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 
     try:
-        out, err = proc.communicate(input='\n', timeout=60)
+        nl = '\n'.encode('utf-8')
+        out, err = proc.communicate(input=nl, timeout=60)
     except TimeoutExpired:
         proc.kill()
+        out, err = proc.communicate()
         return None
 
     proc.wait()
@@ -69,7 +71,7 @@ def term_getpass():
 
 def get_active_title():
     """Gets the active window title."""
-    from subprocess import Popen, PIPE
+    from subprocess import Popen, PIPE, TimeoutExpired
 
     xd = 'xdotool'
     needs(xd)
@@ -80,6 +82,7 @@ def get_active_title():
         out, err = proc.communicate(timeout=60)
     except TimeoutExpired:
         proc.kill()
+        out, err = proc.communicate()
         return None
 
     proc.wait()
@@ -97,12 +100,19 @@ def focus_window(name):
 
 def find_entry(string):
     """Search for an entry based on win field."""
+
+    def sanitize(ostr):
+        return ostr.lower().strip()
+
     for name,entry in db.items():
         if 'win' not in entry.keys():
             continue
         else:
-            sub = string.lower().find(entry['win'].lower())
-        if sub > 0:
+            string = sanitize(string)
+            substr = sanitize(entry['win'])
+            match = string.find(substr)
+            print(string, substr, match)
+        if match >= 0:
             return entry
     return None
 
