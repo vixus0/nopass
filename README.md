@@ -4,6 +4,9 @@ nopass
 A password database that doesn't store passwords.
 It just stores usernames, URLs and other details.
 No need to store an encrypted database file or worry about safe syncing in the cloud.
+
+**nopass is unsuitable for storing old passwords. It generates new ones for you.**
+
 At the moment this is only useful for *nix users.
 
 Requirements
