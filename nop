@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import hashlib, argparse, os, sys
+import hashlib, argparse, os
 
 try:
     import cPickle as pkl
@@ -15,13 +15,18 @@ ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub', 'type']
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
 
 
+def die():
+    import sys
+    sys.exit(1)
+
+
 def mkpass(entry, phrase):
     """Creates hash from database entry and passphrase."""
     h = hashlib.sha256()
     h.update(phrase.encode('utf-8'))
     h.update(entry['name'].encode('utf-8'))
     pw = h.hexdigest()[:entry['trunc']]
-    if entry['sub']:
+    if 'sub' in entry.keys():
         for s in entry['sub']:
             pw = pw.replace(s[0], s[1])
     return pw
@@ -38,8 +43,8 @@ def is_exe(exe):
 def needs(exe):
     if not is_exe(exe):
         print('Requires {}!'.format(exe))
-        sys.exit(1)
-
+        die()
+        
 
 def dmenu_getpass():
     """Opens a dmenu prompt to get the passphrase."""
@@ -56,9 +61,13 @@ def dmenu_getpass():
     except TimeoutExpired:
         proc.kill()
         out, err = proc.communicate()
-        return None
-
+        die()
+        
     proc.wait()
+
+    if len(err) > 0:
+        print(err.decode('utf-8'))
+        die()
 
     phrase = out.decode('utf-8')
     return phrase
@@ -170,6 +179,7 @@ def argparser():
     """Creates the argument parser for pwdb."""
     ap = argparse.ArgumentParser(description='Simple password manager.')
     ap.add_argument('-f', '--file', help='Database file', default=DEFAULT_DB)
+    ap.add_argument('-d', '--dmenu', help='Use dmenu to ask for passphrase', action='store_true')
 
     sub = ap.add_subparsers(title='commands')
 
@@ -195,6 +205,9 @@ def argparser():
     prn_parser.add_argument('--pw', help='Print password IN PLAINTEXT', action='store_true')
     prn_parser.add_argument('--all', help='Print all fields', action='store_true')
     prn_parser.set_defaults(run=prn)
+
+    lst_parser = sub.add_parser('list', aliases=['l'], help='List entry names')
+    lst_parser.set_defaults(run=lst)
 
     xdo_parser = sub.add_parser('xdo', aliases=['x'], help='Autotyping with xdotool')
     xdo_parser.add_argument('-n', '--entry', help='Autofocus and autotype based on entry') 
@@ -242,7 +255,7 @@ def prn(db, args):
         entry = db[args.entry]
 
         if args.pw:
-            phrase = term_getpass()
+            phrase = dmenu_getpass() if args.dmenu else term_getpass()
 
         if args.all:
             pfields = fields
@@ -254,6 +267,12 @@ def prn(db, args):
             print(fmt.format('password', mkpass(entry, phrase)))
     else:
         print("Entry not found.")
+
+
+def lst(db, args):
+    """List all the entry names."""
+    for k in db.keys():
+        print(k)
 
 
 def xdo(db, args):
