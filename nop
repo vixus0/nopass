@@ -8,7 +8,8 @@ except ImportError:
     import pickle as pkl
 
 DEFAULT_DB = os.environ['HOME'] + '/.pwdb'
-ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub']
+DEFAULT_TYPE = '(user)[tab](password)'
+ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub', 'type']
 
 
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
@@ -98,11 +99,13 @@ def focus_window(name):
     call([xd, 'search', '--name', name, 'windowfocus', '--sync'])
     
 
+def sanitize(ostr):
+    """Clean up strings."""
+    return ostr.lower().strip()
+
+
 def find_entry(string):
     """Search for an entry based on win field."""
-
-    def sanitize(ostr):
-        return ostr.lower().strip()
 
     for name,entry in db.items():
         if 'win' not in entry.keys():
@@ -111,7 +114,6 @@ def find_entry(string):
             string = sanitize(string)
             substr = sanitize(entry['win'])
             match = string.find(substr)
-            print(string, substr, match)
         if match >= 0:
             return entry
     return None
@@ -120,12 +122,45 @@ def find_entry(string):
 def autotype(entry, phrase):
     """Autotype the username and password."""
     from subprocess import call
+
     xd = 'xdotool'
     needs(xd)
     pw = mkpass(entry, phrase)
-    call([xd, 'getactivewindow', 'type', '--clearmodifiers', entry['user']])
-    call([xd, 'getactivewindow', 'key', '--clearmodifiers', 'Tab'])
-    call([xd, 'getactivewindow', 'type', '--clearmodifiers', pw])
+    cmds = typecmds(entry, pw)
+    for cmd in cmds:
+        args = [xd, 'getactivewindow'] + cmd
+        call(args)
+
+
+def typecmds(entry, pw):
+    """Parses the type command string to xdotool commands."""
+    import re
+
+    def repl(m):
+        f = m.group(1)
+        if f.startswith('pass'):
+            return pw
+        return entry[f] if f in entry.keys() else ''
+
+    rkey =   re.compile(r'\[(\w+)\]')   # special keys: Esc, Tab, etc.
+    rfield = re.compile(r'\((\w+)\)')   # fields: user, target, etc.
+
+    cmds = []
+    string = sanitize(entry['type']) if 'type' in entry.keys() else DEFAULT_TYPE
+
+    # First, split on special keys
+    tokens = re.split(r'(\[\w+\])', string)
+
+    for t in tokens:
+        kmatch = rkey.match(t)
+        if kmatch:
+            key = kmatch.group(1).capitalize()
+            cmds.append(['key', '--clearmodifiers', key])
+        else:
+            newstr = rfield.sub(repl, t)
+            cmds.append(['type', '--clearmodifiers', newstr])
+
+    return cmds
 
 
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
@@ -146,6 +181,7 @@ def argparser():
     add_parser.add_argument('-w', '--win', help='Window name for autotyping', metavar='STR')
     add_parser.add_argument('--trunc', help='Truncate password to N characters', type=int, metavar='N', default=20) 
     add_parser.add_argument('--sub', help='Substitute characters in hash', nargs=2, metavar=('CHAR', 'SUBST'), action='append')
+    add_parser.add_argument('--type', help='Type command string', metavar='STR')
     add_parser.set_defaults(run=add)
 
     del_parser = sub.add_parser('del', aliases=['d'], help='Delete an entry')
