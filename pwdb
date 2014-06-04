@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import hashlib, argparse, os
+import hashlib, argparse, os, sys
 from getpass import getpass, getuser
 
 try:
@@ -8,16 +8,98 @@ try:
 except ImportError:
     import pickle as pkl
 
-DEFAULT_DB = os.environ['HOME'] + "/.pwdb"
+DEFAULT_DB = os.environ['HOME'] + '/.pwdb'
 ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub']
 
 def is_exe(exe):
+    """Checks PATH for existence of executable."""
     for path in os.environ["PATH"].split(os.pathsep):
         f = os.path.join(path, exe)
         if os.path.isfile(f) and os.access(f, os.X_OK):
             return True
 
+def needs(exe):
+    if not is_exe(exe):
+        print('Requires {}!'.format(exe))
+        sys.exit(1)
+
+def dmenu_getpass():
+    """Opens a dmenu prompt to get the passphrase."""
+    from subprocess import Popen, PIPE
+
+    dm = 'dmenu'
+    needs(dm)
+
+    proc = Popen([dm, '-p', 'Passphrase:'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+
+    try:
+        out, err = proc.communicate(input='\n', timeout=60)
+    except TimeoutExpired:
+        proc.kill()
+        return None
+
+    proc.wait()
+
+    phrase = out.decode('utf-8')
+    return phrase
+
+
+def get_active_title():
+    """Gets the active window title."""
+    from subprocess import Popen, PIPE
+
+    xd = 'xdotool'
+    needs(xd)
+
+    proc = Popen([xd, 'getactivewindow', 'getwindowname'], stdin=None, stdout=PIPE, stderr=PIPE)
+
+    try:
+        out, err = proc.communicate(timeout=60)
+    except TimeoutExpired:
+        proc.kill()
+        return None
+
+    proc.wait()
+    title = out.decode('utf-8')
+    return title
+
+
+def focus_window(name):
+    """Focus a window with xdotool."""
+    from subprocess import call
+    xd = 'xdotool'
+    needs(xd)
+    call([xd, 'search', '--name', name, 'windowfocus', '--sync'])
+    
+
+def find_entry(string):
+    """Search for an entry based on win field."""
+    for name,entry in db.items():
+        if 'win' not in entry.keys():
+            continue
+        else:
+            sub = string.lower().find(entry['win'].lower())
+        if sub > 0:
+            return entry
+    return None
+
+
+def autotype(entry, phrase):
+    """Autotype the username and password."""
+    from subprocess import call
+    xd = 'xdotool'
+    needs(xd)
+    pw = mkpass(entry, phrase)
+    call([xd, 'getactivewindow', 'type', '--clearmodifiers', entry['user']])
+    call([xd, 'getactivewindow', 'key', '--clearmodifiers', 'Tab'])
+    call([xd, 'getactivewindow', 'type', '--clearmodifiers', pw])
+
+
+## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
+
+
 def argparser():
+    """Creates the argument parser for pwdb."""
     ap = argparse.ArgumentParser(description='Simple password manager.')
     ap.add_argument('-f', '--file', help='Database file', default=DEFAULT_DB)
 
@@ -51,27 +133,40 @@ def argparser():
 
     return ap
 
+
 def mkpass(entry, phrase):
+    """Creates hash from database entry and passphrase."""
     h = hashlib.sha1()
-    h.update(entry['user'])
-    h.update(entry['target'])
-    h.update(phrase)
-    return h.hexdigest()
+    h.update(entry['user'].encode('utf-8'))
+    h.update(entry['target'].encode('utf-8'))
+    h.update(phrase.encode('utf-8'))
+    pw = h.hexdigest()[:entry['trunc']]
+    if entry['sub']:
+        for s in entry['sub']:
+            pw = pw.replace(s[0], s[1])
+    return pw
+
 
 def add(db, args):
+    """Add database entry."""
     fields = ROW_FIELDS
+    args.name = args.entry
     if args.entry in db.keys() and not args.force:
         print("Entry already exists in database. Use -f to overwrite.")
     else:
         db[args.entry] = {k:v for k,v in vars(args).items() if k in fields}
 
+
 def delete(db, args):
+    """Delete database entry."""
     if args.entry in db.keys():
         del db[args.entry]
     else:
         print("Entry not found.")
 
+
 def prn(db, args):
+    """Print database entry."""
     fields = ROW_FIELDS
     pfields = args.prn_fields
 
@@ -81,8 +176,9 @@ def prn(db, args):
         if args.all:
             pfields = fields
 
-        for k in pfields:
-            print("{} {}".format(k, entry[k]))
+        if pfields:
+            for k in pfields:
+                print("{} {}".format(k, entry[k]))
 
         if args.pw:
             phrase = getpass('Passphrase: ')
@@ -90,69 +186,55 @@ def prn(db, args):
     else:
         print("Entry not found.")
 
-def dmenu_getpass():
-    import subprocess as sub
-
-
 
 def xdo(db, args):
-    import subprocess as sub
-    xd = 'xdotool'
+    """Autotyping with xdotool."""
 
-    def find_entry(string):
-        for name,entry in db.items():
-            if 'win' not in entry.keys():
-                continue
-            else:
-                sub = string.lower().find(entry['win'].lower())
-            if sub > 0:
-                return entry
-        return None
+    phrase = dmenu_getpass()
 
-    if not is_exe(xd):
-        print("Requires xdotool!")
-        return
-    if not args.entry:
+    if args.entry:
+        # Focus the window and start typing
+        entry = db[args.entry]
+        focus_window(entry['win'])
+        autotype(entry, phrase)
+    else:
         # Then we just use the active window 
-        proc = sub.Popen([xd, 'getactivewindow', 'getwindowname'],
-                stdin=None, stdout=sub.PIPE, stderr=sub.PIPE
-                )
-        try:
-            out, err = proc.communicate(timeout=60)
-        except TimeoutExpired:
-            proc.kill()
+        title = get_active_title()
+        if not title:
             return
 
-        proc.wait()
-
-        title = out.decode("utf-8")
         print("Title: "+title)
 
         # Search in entries
         entry = find_entry(title)
         if entry:
             print("Found entry: "+entry['name'])
-            phrase = dmenu_getpass()
-            sub.call([xd, 'getactivewindow', 'type', entry['user']])
-            sub.call([xd, 'getactivewindow', 'key', 'Tab'])
-            sub.call([xd, 'getactivewindow', 'type', mkpass(entry, phrase))
-
+            autotype(entry, phrase)
+        else:
+            print("No matching entry.")
+            return
 
 
 def save_db(db, path):
+    """Saves the database file."""
     dirs = os.path.dirname(path)
     if not os.path.isdir(dirs):
         os.makedirs(dirs)
     f = open(path, 'wb')
     pkl.dump(db, f, -1)
 
+
 def load_db(path):
+    """Loads the database file."""
     try:
         d = pkl.load(open(path, 'rb'))
     except (FileNotFoundError, pkl.UnpicklingError) as e:
         print("Error loading database file at: "+path)
         d = {}
     return d
+
+
+## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
 
 
 if __name__ == "__main__":
