@@ -27,8 +27,10 @@ Running any of these commands with the `-h` flag will display help for those com
 If you're not going to use autotyping, or it doesn't work for your situation you can easily combine *nopass* with `dmenu` and a clipboard tool like `xclip`.
 
 ```
-nop p -d --pw | xclip -i
+entry=`nop l | dmenu`
+nop -d p --pw $entry | xclip -i
 ```
+where `-d` uses dmenu for passphrase input instead of stdin.
 
 Autotyping
 ---------
