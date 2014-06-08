@@ -9,7 +9,7 @@ except ImportError:
 
 DEFAULT_DB = os.environ['HOME'] + '/.pwdb'
 DEFAULT_TYPE = '(user)[tab](password)'
-ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub', 'type']
+ROW_FIELDS = ['name', 'user', 'target', 'win', 'trunc', 'sub', 'type', 'tstamp']
 
 
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
@@ -25,6 +25,8 @@ def mkpass(entry, phrase):
     h = hashlib.sha256()
     h.update(phrase.encode('utf-8'))
     h.update(entry['name'].encode('utf-8'))
+    if 'tstamp' in entry.keys():
+        h.update(entry['tstamp'].encode('utf-8'))
     pw = h.hexdigest()[:entry['trunc']]
     if 'sub' in entry.keys():
         for s in entry['sub']:
@@ -172,6 +174,10 @@ def typecmds(entry, pw):
     return cmds
 
 
+def getphrase(dmenu):
+    return dmenu_getpass() if args.dmenu else term_getpass()
+
+
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## 
 
 
@@ -193,6 +199,10 @@ def argparser():
     add_parser.add_argument('--sub', help='Substitute characters in hash', nargs=2, metavar=('CHAR', 'SUBST'), action='append')
     add_parser.add_argument('--type', help='Type command string', metavar='STR')
     add_parser.set_defaults(run=add)
+
+    upd_parser = sub.add_parser('update', aliases=['u'], help='Update entry timestamp (change password)')
+    upd_parser.add_argument('entry', help='Entry to update')
+    upd_parser.set_defaults(run=update)
 
     del_parser = sub.add_parser('del', aliases=['d'], help='Delete an entry')
     del_parser.add_argument('entry', help='Entry name')
@@ -218,8 +228,11 @@ def argparser():
 
 def add(db, args):
     """Add database entry."""
+    from time import time
+
     fields = ROW_FIELDS
     args.name = args.entry
+    args.tstamp = str(time())
     itm = vars(args).items()
 
     if args.edit:
@@ -236,10 +249,25 @@ def add(db, args):
             db[args.entry] = {k:v for k,v in itm if k in fields and v}
 
 
+def update(db, args):
+    """Updates the timestamp on a database entry."""
+    from time import time
+
+    phrase = getphrase(args.dmenu)
+    entry = db[args.entry]
+    oldpw = mkpass(entry, phrase)
+    entry['tstamp'] = str(time())
+    newpw = mkpass(entry, phrase)
+    print("Old password: "+oldpw)
+    print("New password: "+newpw)
+    print("Take a note of these and change to the new password immediately.")
+
+
 def delete(db, args):
     """Delete database entry."""
     if args.entry in db.keys():
-        del db[args.entry]
+        if input("The password will be unrecoverable! Type 'yes' if you're sure: ") == 'yes':
+            del db[args.entry]
     else:
         print("Entry not found.")
 
@@ -255,7 +283,7 @@ def prn(db, args):
         entry = db[args.entry]
 
         if args.pw:
-            phrase = dmenu_getpass() if args.dmenu else term_getpass()
+            phrase = getphrase(args.dmenu)
 
         if args.all:
             pfields = fields
@@ -281,12 +309,12 @@ def xdo(db, args):
     phrase = dmenu_getpass()
 
     if args.entry:
-        # Focus the window and start typing
         entry = db[args.entry]
-        focus_window(entry['win'])
+        if win in entry.keys():
+            focus_window(entry['win'])
         autotype(entry, phrase)
     else:
-        # Then we just use the active window 
+        # Try and guess entry from the active window title
         title = get_active_title()
         if not title:
             return
